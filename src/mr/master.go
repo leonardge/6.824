@@ -1,6 +1,10 @@
 package mr
 
-import "log"
+import (
+	"fmt"
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
@@ -9,7 +13,13 @@ import "net/http"
 
 type Master struct {
 	// Your definitions here.
-
+	inputFiles      []string
+	nReduce         int
+	accessLock      sync.Mutex
+	toStartFiles    []string
+	inProgressFiles []string
+	// index for the next map task just in case it fails
+	nextMapTaskIdx int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -22,6 +32,27 @@ type Master struct {
 func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
+}
+
+func (m *Master) ServeRequest(args *RequestWorkArgs, reply *RequestWorkReply) error {
+	if args.RequestType == "map" {
+		var file string
+		var remainingFiles []string
+
+		m.accessLock.Lock()
+		file, remainingFiles = m.toStartFiles[0], m.toStartFiles[1:]
+		m.nextMapTaskIdx += 1
+		m.toStartFiles = remainingFiles
+		m.accessLock.Unlock()
+
+		reply.FileName = file
+		reply.MapId = m.nextMapTaskIdx - 1
+		reply.ReduceTotal = m.nReduce
+
+		return nil
+	} else {
+		return fmt.Errorf("can't handle task type other than map")
+	}
 }
 
 
@@ -49,7 +80,10 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	if len(m.toStartFiles) == 0 {
+		print("done!\n")
+		ret = true
+	}
 
 	return ret
 }
@@ -60,7 +94,13 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{}
+	m := Master{
+		inputFiles:   files,
+		nReduce:      nReduce,
+		toStartFiles: files,
+		inProgressFiles: make([]string, 0),
+		nextMapTaskIdx: 0,
+	}
 
 	// Your code here.
 

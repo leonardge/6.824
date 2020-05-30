@@ -30,6 +30,17 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	for {
+		println("entering the loop!")
+
+		request := RequestWorkArgs{
+			RequestType: "map",
+		}
+		reply := RequestWorkReply{}
+		call("Master.ServeRequest", request, reply)
+
+		println(reply.FileName)
+	}
 
 	// Your worker implementation here.
 

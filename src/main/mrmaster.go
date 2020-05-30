@@ -21,9 +21,10 @@ func main() {
 	}
 
 	m := mr.MakeMaster(os.Args[1:], 10)
+	fmt.Printf("input files: %v\n", os.Args[1:])
 	for m.Done() == false {
 		time.Sleep(time.Second)
 	}
-
+	print("finished!\n")
 	time.Sleep(time.Second)
 }
