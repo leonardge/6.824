@@ -6,4 +6,3 @@ mrtmp.*
 /pbservice/x.txt
 /kvpaxos/x.txt
 *.so
-../.idea/
