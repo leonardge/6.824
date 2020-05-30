@@ -29,9 +29,10 @@ type RequestWorkArgs struct {
 }
 
 type RequestWorkReply struct {
-	FileName string
+	FileName    string
 	ReduceTotal int
-	MapId int
+	MapId       int
+	WorkType    string
 }
 
 

@@ -40,14 +40,22 @@ func (m *Master) ServeRequest(args *RequestWorkArgs, reply *RequestWorkReply) er
 		var remainingFiles []string
 
 		m.accessLock.Lock()
+		if len(m.toStartFiles) == 0 {
+			log.Printf("All map has been dispatched")
+			return nil
+		}
+
 		file, remainingFiles = m.toStartFiles[0], m.toStartFiles[1:]
+		mapId := m.nextMapTaskIdx
 		m.nextMapTaskIdx += 1
 		m.toStartFiles = remainingFiles
 		m.accessLock.Unlock()
 
+		reply.WorkType = "map"
 		reply.FileName = file
-		reply.MapId = m.nextMapTaskIdx - 1
+		reply.MapId = mapId
 		reply.ReduceTotal = m.nReduce
+		fmt.Printf("reply: %v", reply)
 
 		return nil
 	} else {

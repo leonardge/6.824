@@ -1,6 +1,11 @@
 package mr
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -30,16 +35,32 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	createDirIfNotExist("temp_map")
 	for {
 		println("entering the loop!")
 
 		request := RequestWorkArgs{
 			RequestType: "map",
 		}
-		reply := RequestWorkReply{}
-		call("Master.ServeRequest", request, reply)
 
-		println(reply.FileName)
+		reply := RequestWorkReply{}
+
+		ok := call("Master.ServeRequest", &request, &reply)
+		// rpc has failed, master must already has exitted.
+		if !ok {
+			log.Printf("Cannot call master")
+			return
+		}
+		if reply.FileName != "" && reply.WorkType == "map" {
+			println("filename is : %s", reply.FileName)
+			MapFile(mapf, reply)
+			continue
+		}
+
+		if reply.FileName != "" && reply.WorkType == "reduce" {
+			println("it shouldn't go here yet, we don't support reduce.")
+		}
+
 	}
 
 	// Your worker implementation here.
@@ -47,6 +68,52 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the master.
 	// CallExample()
 
+}
+
+func MapFile(mapf func(string, string) []KeyValue, reply RequestWorkReply) {
+	file, err := os.Open(reply.FileName)
+	if err != nil {
+		log.Fatalf("cannot open %v", reply.FileName)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", reply.FileName)
+	}
+	err = file.Close()
+	if err != nil {
+		log.Fatal("Error closing input file")
+	}
+	kvs := mapf(reply.FileName, string(content))
+	writeKVs(fmt.Sprintf("map-%d", reply.MapId), kvs)
+}
+
+func createDirIfNotExist(path string) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		os.Mkdir(path, 0777)
+	}
+}
+
+func writeKVs(fileName string, keyvalues []KeyValue) {
+	file, err := ioutil.TempFile("", "map")
+	if err != nil {
+		return
+	}
+	enc := json.NewEncoder(file)
+	for _, kv := range keyvalues {
+		err := enc.Encode(kv)
+		if err != nil {
+			return
+		}
+	}
+	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s",fileName))
+	if err != nil {
+		log.Fatalf("error renaming %v", err)
+	}
+	err = file.Close()
+	if err != nil {
+		log.Fatalf("error closing map file: %v", err)
+	}
+	println("write complete")
 }
 
 //
@@ -68,6 +135,7 @@ func CallExample() {
 	// send the RPC request, wait for the reply.
 	call("Master.Example", &args, &reply)
 
+
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
 }
@@ -82,7 +150,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		log.Fatal("dialing :", err)
 	}
 	defer c.Close()
 
