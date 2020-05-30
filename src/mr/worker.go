@@ -63,11 +63,6 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	}
 
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
-
 }
 
 func MapFile(mapf func(string, string) []KeyValue, reply RequestWorkReply) {
@@ -114,30 +109,6 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 		log.Fatalf("error closing map file: %v", err)
 	}
 	println("write complete")
-}
-
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
-
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 //
