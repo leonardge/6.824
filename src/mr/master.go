@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"sync"
 )
@@ -13,13 +12,23 @@ import "net/http"
 
 type Master struct {
 	// Your definitions here.
-	inputFiles      []string
-	nReduce         int
-	accessLock      sync.Mutex
-	toStartFiles    []string
-	inProgressFiles []string
+	inputFiles       []string
+	nReduce          int
+	accessLock       sync.Mutex
+
+	// Map Stage
+	toStartFiles     []string
+	inProgressFiles  map[string]bool
+	completedFiles   map[string]bool
+
+	// Reduce Stage
+	toStartReduce    []int
+	inProgressReduce map[int]bool
+	completedReduce  map[int]bool
+
 	// index for the next map task just in case it fails
 	nextMapTaskIdx int
+	isMapCompleted bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -35,32 +44,67 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (m *Master) ServeRequest(args *RequestWorkArgs, reply *RequestWorkReply) error {
-	if args.RequestType == "map" {
-		var file string
-		var remainingFiles []string
+	m.accessLock.Lock()
+	defer m.accessLock.Unlock()
 
-		m.accessLock.Lock()
-		if len(m.toStartFiles) == 0 {
-			log.Printf("All map has been dispatched")
-			return nil
-		}
-
-		file, remainingFiles = m.toStartFiles[0], m.toStartFiles[1:]
-		mapId := m.nextMapTaskIdx
-		m.nextMapTaskIdx += 1
-		m.toStartFiles = remainingFiles
-		m.accessLock.Unlock()
-
-		reply.WorkType = "map"
-		reply.FileName = file
-		reply.MapId = mapId
-		reply.ReduceTotal = m.nReduce
-		fmt.Printf("reply: %v", reply)
-
-		return nil
-	} else {
-		return fmt.Errorf("can't handle task type other than map")
+	if !m.isMapCompleted && len(m.toStartFiles) > 0 {
+		return m.ServeMap(args, reply)
+	} else if m.isMapCompleted && len(m.toStartReduce) > 0 {
+		return m.ServeReduce(args, reply)
 	}
+	return nil
+}
+
+func (m *Master) ServeCompletion(args *CompleteWorkArgs, reply *CompleteWorkArgs) error {
+	m.accessLock.Lock()
+	defer m.accessLock.Unlock()
+
+	if args.CompletionType == "map" {
+		delete(m.inProgressFiles, args.MapFileName)
+		m.completedFiles[args.MapFileName] = true
+		if len(m.completedFiles) == len(m.inputFiles) {
+			log.Printf("Map stage completed!")
+			m.toStartReduce = makeRange(0, m.nReduce - 1)
+			m.isMapCompleted = true
+		}
+	} else if args.CompletionType == "reduce" {
+		delete(m.inProgressReduce, args.reduceId)
+		m.completedReduce[args.reduceId] = true
+	} else {
+		log.Fatalf("It shouldn't be here.")
+	}
+
+	return nil
+}
+
+func makeRange(min, max int) []int {
+	a := make([]int, max-min+1)
+	for i := range a {
+		a[i] = min + i
+	}
+	return a
+}
+
+func (m *Master) ServeMap(args *RequestWorkArgs, reply *RequestWorkReply) error {
+	var file string
+	var remainingFiles []string
+	file, remainingFiles = m.toStartFiles[0], m.toStartFiles[1:]
+	mapId := m.nextMapTaskIdx
+	m.nextMapTaskIdx += 1
+	m.toStartFiles = remainingFiles
+	m.inProgressFiles[file] = true
+
+	reply.WorkType = "map"
+	reply.FileName = file
+	reply.MapId = mapId
+	reply.ReduceTotal = m.nReduce
+
+	return nil
+}
+
+func (m *Master) ServeReduce(args *RequestWorkArgs, reply *RequestWorkReply) error {
+	reply.WorkType = "reduce"
+	return nil
 }
 
 
@@ -85,14 +129,9 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
-
-	// Your code here.
-	if len(m.toStartFiles) == 0 {
-		print("done!\n")
-		ret = true
-	}
-
+	m.accessLock.Lock()
+	defer m.accessLock.Unlock()
+	ret := len(m.completedReduce) == m.nReduce
 	return ret
 }
 
@@ -106,8 +145,10 @@ func MakeMaster(files []string, nReduce int) *Master {
 		inputFiles:   files,
 		nReduce:      nReduce,
 		toStartFiles: files,
-		inProgressFiles: make([]string, 0),
+		inProgressFiles: make(map[string]bool),
+		completedFiles: make(map[string]bool),
 		nextMapTaskIdx: 0,
+		isMapCompleted: false,
 	}
 
 	// Your code here.

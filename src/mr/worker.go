@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 )
 import "log"
 import "net/rpc"
@@ -37,7 +38,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	createDirIfNotExist("temp_map")
 	for {
-		println("entering the loop!")
+		// println("entering the loop!")
 
 		request := RequestWorkArgs{
 			RequestType: "map",
@@ -52,12 +53,18 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 		if reply.FileName != "" && reply.WorkType == "map" {
-			println("filename is : %s", reply.FileName)
-			MapFile(mapf, reply)
+			log.Printf("Map filename is : %s", reply.FileName)
+			kvs := MapFile(mapf, reply)
+			err := partitionAndWriteFiles(reply.ReduceTotal, kvs, reply.MapId)
+			if err != nil {
+				return
+			}
+			completeMap(reply.FileName)
 			continue
 		}
 
-		if reply.FileName != "" && reply.WorkType == "reduce" {
+		if reply.WorkType == "reduce" {
+			//kvs := R
 			println("it shouldn't go here yet, we don't support reduce.")
 		}
 
@@ -65,7 +72,67 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func MapFile(mapf func(string, string) []KeyValue, reply RequestWorkReply) {
+func ReduceFiles(reduceId int) {
+	sort.Sort(ByKey(intermediate))
+
+	oname := "mr-out-0"
+	ofile, _ := os.Create(oname)
+
+	//
+	// call Reduce on each distinct key in intermediate[],
+	// and print the result to mr-out-0.
+	//
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
+}
+
+func readPartition(reduceId int) {
+
+}
+
+func completeMap(fileName string) bool {
+	request := CompleteWorkArgs{CompletionType: "map", MapFileName: fileName}
+	reply := CompleteWorkReply{}
+	ok := call("Master.ServeCompletion", &request, &reply)
+	return ok
+}
+
+func partitionAndWriteFiles(nReduce int, kvs []KeyValue, mapId int) error {
+	pkvs := make([][]KeyValue, nReduce)
+
+	for i := 0; i < nReduce; i++ {
+		pkvs[i] = make([]KeyValue, 0)
+	}
+
+	for _, kv := range kvs {
+		pkvs[ihash(kv.Key) % nReduce] = append(pkvs[ihash(kv.Key) % nReduce], kv)
+	}
+
+	for reduceId := 0; reduceId < nReduce; reduceId++ {
+		writeKVs(fmt.Sprintf("map-%d-%d", mapId, reduceId), pkvs[reduceId])
+	}
+
+	return nil
+}
+
+func MapFile(mapf func(string, string) []KeyValue, reply RequestWorkReply) []KeyValue {
 	file, err := os.Open(reply.FileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", reply.FileName)
@@ -79,7 +146,7 @@ func MapFile(mapf func(string, string) []KeyValue, reply RequestWorkReply) {
 		log.Fatal("Error closing input file")
 	}
 	kvs := mapf(reply.FileName, string(content))
-	writeKVs(fmt.Sprintf("map-%d", reply.MapId), kvs)
+	return kvs
 }
 
 func createDirIfNotExist(path string) {

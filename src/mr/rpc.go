@@ -29,12 +29,28 @@ type RequestWorkArgs struct {
 }
 
 type RequestWorkReply struct {
+	WorkType    string
+
+	// map arg
 	FileName    string
 	ReduceTotal int
 	MapId       int
-	WorkType    string
+
+	// reduce arg
+	ReduceId    int
 }
 
+type CompleteWorkArgs struct {
+	// either "map" or "reduce"
+	CompletionType string
+
+	reduceId       int
+
+	MapFileName string
+}
+
+
+type CompleteWorkReply struct {}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
