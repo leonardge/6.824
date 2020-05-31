@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"regexp"
 	"sort"
 )
 import "log"
@@ -19,6 +20,13 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -64,51 +72,87 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 
 		if reply.WorkType == "reduce" {
-			//kvs := R
-			println("it shouldn't go here yet, we don't support reduce.")
+			kvs := readPartition(reply.ReduceId)
+			kvs = ReduceFiles(reducef, kvs)
+			writeKVs(fmt.Sprintf("reduce-%d", reply.ReduceId), kvs)
 		}
 
 	}
 
 }
 
-func ReduceFiles(reduceId int) {
-	sort.Sort(ByKey(intermediate))
-
-	oname := "mr-out-0"
-	ofile, _ := os.Create(oname)
-
+func ReduceFiles(
+	reducef func(string, []string) string, kvs []KeyValue) []KeyValue {
+	sort.Sort(ByKey(kvs))
+	res := make([]KeyValue, 0)
 	//
 	// call Reduce on each distinct key in intermediate[],
 	// and print the result to mr-out-0.
 	//
 	i := 0
-	for i < len(intermediate) {
+	for i < len(kvs) {
 		j := i + 1
-		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+		for j < len(kvs) && kvs[j].Key == kvs[i].Key {
 			j++
 		}
 		values := []string{}
 		for k := i; k < j; k++ {
-			values = append(values, intermediate[k].Value)
+			values = append(values, kvs[k].Value)
 		}
-		output := reducef(intermediate[i].Key, values)
+		output := reducef(kvs[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
-		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+		res = append(res, KeyValue{Key:kvs[i].Key, Value: output})
 
 		i = j
 	}
 
-	ofile.Close()
+	return res
 }
 
-func readPartition(reduceId int) {
+func readPartition(reduceId int) []KeyValue {
+	files, err := ioutil.ReadDir("./temp_map")
+	if err != nil {
+		log.Fatal(err)
+	}
 
+	kva := make([]KeyValue, 0)
+	for _, f := range files {
+		if !isStringMatching(fmt.Sprintf("map-*-%d", reduceId), f.Name()) {
+			continue
+		}
+
+		file, err := os.Open(f.Name())
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+	}
+
+	return kva
+}
+
+func isStringMatching(pattern string, str string) bool{
+	return regexp.MustCompile(pattern).MatchString(str)
 }
 
 func completeMap(fileName string) bool {
 	request := CompleteWorkArgs{CompletionType: "map", MapFileName: fileName}
+	reply := CompleteWorkReply{}
+	ok := call("Master.ServeCompletion", &request, &reply)
+	return ok
+}
+
+func completeReduce(reduceId int) bool {
+	request := CompleteWorkArgs{CompletionType: "reduce", ReduceId: reduceId}
 	reply := CompleteWorkReply{}
 	ok := call("Master.ServeCompletion", &request, &reply)
 	return ok
@@ -175,7 +219,7 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 	if err != nil {
 		log.Fatalf("error closing map file: %v", err)
 	}
-	println("write complete")
+	log.Printf("write %s completed", fileName)
 }
 
 //

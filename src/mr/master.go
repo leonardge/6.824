@@ -68,8 +68,8 @@ func (m *Master) ServeCompletion(args *CompleteWorkArgs, reply *CompleteWorkArgs
 			m.isMapCompleted = true
 		}
 	} else if args.CompletionType == "reduce" {
-		delete(m.inProgressReduce, args.reduceId)
-		m.completedReduce[args.reduceId] = true
+		delete(m.inProgressReduce, args.ReduceId)
+		m.completedReduce[args.ReduceId] = true
 	} else {
 		log.Fatalf("It shouldn't be here.")
 	}

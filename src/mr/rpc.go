@@ -44,7 +44,7 @@ type CompleteWorkArgs struct {
 	// either "map" or "reduce"
 	CompletionType string
 
-	reduceId       int
+	ReduceId int
 
 	MapFileName string
 }
