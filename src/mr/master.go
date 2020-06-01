@@ -103,7 +103,15 @@ func (m *Master) ServeMap(args *RequestWorkArgs, reply *RequestWorkReply) error 
 }
 
 func (m *Master) ServeReduce(args *RequestWorkArgs, reply *RequestWorkReply) error {
+	var reduceId int
+	var remainingReduceIds []int
+	reduceId, remainingReduceIds = m.toStartReduce[0], m.toStartReduce[1:]
+	m.toStartReduce = remainingReduceIds
+	m.inProgressReduce[reduceId] = true
+
 	reply.WorkType = "reduce"
+	reply.ReduceId = reduceId
+
 	return nil
 }
 
@@ -144,11 +152,17 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{
 		inputFiles:   files,
 		nReduce:      nReduce,
+
 		toStartFiles: files,
 		inProgressFiles: make(map[string]bool),
 		completedFiles: make(map[string]bool),
+
+		inProgressReduce: make(map[int]bool),
+		completedReduce:  make(map[int]bool),
+
 		nextMapTaskIdx: 0,
 		isMapCompleted: false,
+
 	}
 
 	// Your code here.

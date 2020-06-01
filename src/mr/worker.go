@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 )
 import "log"
 import "net/rpc"
@@ -75,10 +76,42 @@ func Worker(mapf func(string, string) []KeyValue,
 			kvs := readPartition(reply.ReduceId)
 			kvs = ReduceFiles(reducef, kvs)
 			writeKVs(fmt.Sprintf("reduce-%d", reply.ReduceId), kvs)
+			completeReduce(reply.ReduceId)
 		}
 
 	}
 
+}
+
+func readPartition(reduceId int) []KeyValue {
+	files, err := ioutil.ReadDir("./temp_map")
+	if err != nil {
+		log.Fatalf("Error reading directory: %v", err)
+	}
+
+	kva := make([]KeyValue, 0)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), fmt.Sprintf("-%d", reduceId)) {
+			continue
+		}
+
+		log.Printf("reduce id: %d, reading file: %s ", reduceId, file.Name())
+		f, err := os.Open(fmt.Sprintf("./temp_map/%s", file.Name()))
+		if err != nil {
+			log.Fatalf("Error opening file %s: %v", file.Name(), err)
+		}
+
+		dec := json.NewDecoder(f)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+	}
+
+	return kva
 }
 
 func ReduceFiles(
@@ -108,36 +141,6 @@ func ReduceFiles(
 	}
 
 	return res
-}
-
-func readPartition(reduceId int) []KeyValue {
-	files, err := ioutil.ReadDir("./temp_map")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	kva := make([]KeyValue, 0)
-	for _, f := range files {
-		if !isStringMatching(fmt.Sprintf("map-*-%d", reduceId), f.Name()) {
-			continue
-		}
-
-		file, err := os.Open(f.Name())
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		dec := json.NewDecoder(file)
-		for {
-			var kv KeyValue
-			if err := dec.Decode(&kv); err != nil {
-				break
-			}
-			kva = append(kva, kv)
-		}
-	}
-
-	return kva
 }
 
 func isStringMatching(pattern string, str string) bool{
@@ -219,7 +222,7 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 	if err != nil {
 		log.Fatalf("error closing map file: %v", err)
 	}
-	log.Printf("write %s completed", fileName)
+	//log.Printf("write %s completed", fileName)
 }
 
 //
