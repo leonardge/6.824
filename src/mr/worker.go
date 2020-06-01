@@ -62,7 +62,6 @@ func Worker(mapf func(string, string) []KeyValue,
 			return
 		}
 		if reply.FileName != "" && reply.WorkType == "map" {
-			log.Printf("Map filename is : %s", reply.FileName)
 			kvs := MapFile(mapf, reply)
 			err := partitionAndWriteFiles(reply.ReduceTotal, kvs, reply.MapId)
 			if err != nil {
@@ -75,7 +74,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		if reply.WorkType == "reduce" {
 			kvs := readPartition(reply.ReduceId)
 			kvs = ReduceFiles(reducef, kvs)
-			writeKVs(fmt.Sprintf("reduce-%d", reply.ReduceId), kvs)
+			writeKVs(fmt.Sprintf("mr-out-%d", reply.ReduceId), kvs)
 			completeReduce(reply.ReduceId)
 		}
 
@@ -95,7 +94,6 @@ func readPartition(reduceId int) []KeyValue {
 			continue
 		}
 
-		log.Printf("reduce id: %d, reading file: %s ", reduceId, file.Name())
 		f, err := os.Open(fmt.Sprintf("./temp_map/%s", file.Name()))
 		if err != nil {
 			log.Fatalf("Error opening file %s: %v", file.Name(), err)
@@ -222,7 +220,6 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 	if err != nil {
 		log.Fatalf("error closing map file: %v", err)
 	}
-	//log.Printf("write %s completed", fileName)
 }
 
 //
