@@ -12,7 +12,6 @@ import "log"
 import "net/rpc"
 import "hash/fnv"
 
-
 //
 // Map functions return a slice of KeyValue.
 //
@@ -37,7 +36,6 @@ func ihash(key string) int {
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
 
 //
 // main/mrworker.go calls this function.
@@ -66,7 +64,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			if err != nil {
 				return
 			}
-			completeMap(reply.FileName)
+			completeMap(reply.MapId)
 			continue
 		}
 
@@ -132,7 +130,7 @@ func ReduceFiles(
 		output := reducef(kvs[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
-		res = append(res, KeyValue{Key:kvs[i].Key, Value: output})
+		res = append(res, KeyValue{Key: kvs[i].Key, Value: output})
 
 		i = j
 	}
@@ -140,8 +138,8 @@ func ReduceFiles(
 	return res
 }
 
-func completeMap(fileName string) bool {
-	request := CompleteWorkArgs{CompletionType: "map", MapFileName: fileName}
+func completeMap(mapId int) bool {
+	request := CompleteWorkArgs{CompletionType: "map", MapId: mapId}
 	reply := CompleteWorkReply{}
 	ok := call("Master.ServeCompletion", &request, &reply)
 	return ok
@@ -162,7 +160,7 @@ func partitionAndWriteFiles(nReduce int, kvs []KeyValue, mapId int) error {
 	}
 
 	for _, kv := range kvs {
-		pkvs[ihash(kv.Key) % nReduce] = append(pkvs[ihash(kv.Key) % nReduce], kv)
+		pkvs[ihash(kv.Key)%nReduce] = append(pkvs[ihash(kv.Key)%nReduce], kv)
 	}
 
 	for reduceId := 0; reduceId < nReduce; reduceId++ {
@@ -207,7 +205,7 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 			return
 		}
 	}
-	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s",fileName))
+	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s", fileName))
 	if err != nil {
 		log.Fatalf("error renaming %v", err)
 	}
@@ -225,7 +223,7 @@ func writeResult(fileName string, keyvalues []KeyValue) {
 	for _, kv := range keyvalues {
 		fmt.Fprintf(file, "%v %v\n", kv.Key, kv.Value)
 	}
-	err = os.Rename(file.Name(), fmt.Sprintf("%s",fileName))
+	err = os.Rename(file.Name(), fmt.Sprintf("%s", fileName))
 	if err != nil {
 		log.Fatalf("error renaming %v", err)
 	}

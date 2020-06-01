@@ -9,19 +9,6 @@ package mr
 import "os"
 import "strconv"
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 // Add your RPC definitions here.
 
 type RequestWorkArgs struct {
@@ -46,7 +33,7 @@ type CompleteWorkArgs struct {
 
 	ReduceId int
 
-	MapFileName string
+	MapId int
 }
 
 

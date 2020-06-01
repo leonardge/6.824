@@ -10,47 +10,34 @@ import "os"
 import "net/rpc"
 import "net/http"
 
-
 type Master struct {
 	// Your definitions here.
-	inputFiles       []string
-	nReduce          int
-	accessLock       sync.Mutex
+	inputFiles []string
+	nReduce    int
+	accessLock sync.Mutex
+	allFiles   []string
 
 	// Map Stage
-	toStartFiles     []string
-	inProgressFiles  map[string]bool
-	completedFiles   map[string]bool
+	toStartMaps    []int
+	inProgressMaps map[int]bool
+	completedMaps  map[int]bool
 
 	// Reduce Stage
-	toStartReduce    []int
-	inProgressReduce map[int]bool
-	completedReduce  map[int]bool
+	toStartReduces    []int
+	inProgressReduces map[int]bool
+	completedReduces  map[int]bool
 
-	// index for the next map task just in case it fails
-	nextMapTaskIdx int
 	isMapCompleted bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
 func (m *Master) ServeRequest(args *RequestWorkArgs, reply *RequestWorkReply) error {
 	m.accessLock.Lock()
 	defer m.accessLock.Unlock()
 
-	if !m.isMapCompleted && len(m.toStartFiles) > 0 {
+	if !m.isMapCompleted && len(m.toStartMaps) > 0 {
 		return m.ServeMap(args, reply)
-	} else if m.isMapCompleted && len(m.toStartReduce) > 0 {
+	} else if m.isMapCompleted && len(m.toStartReduces) > 0 {
 		return m.ServeReduce(args, reply)
 	}
 	return nil
@@ -62,9 +49,9 @@ func (m *Master) ServeCompletion(args *CompleteWorkArgs, reply *CompleteWorkArgs
 
 	if args.CompletionType == "map" {
 		m.handleMapCompletion(args)
-		if len(m.completedFiles) == len(m.inputFiles) {
+		if len(m.completedMaps) == len(m.inputFiles) {
 			log.Printf("Map stage completed!")
-			m.toStartReduce = makeRange(0, m.nReduce-1)
+			m.toStartReduces = makeRange(0, m.nReduce-1)
 			m.isMapCompleted = true
 		}
 	} else if args.CompletionType == "reduce" {
@@ -77,16 +64,16 @@ func (m *Master) ServeCompletion(args *CompleteWorkArgs, reply *CompleteWorkArgs
 }
 
 func (m *Master) handleMapCompletion(args *CompleteWorkArgs) {
-	if _, ok := m.inProgressFiles[args.MapFileName]; ok {
-		delete(m.inProgressFiles, args.MapFileName)
-		m.completedFiles[args.MapFileName] = true
+	if _, ok := m.inProgressMaps[args.MapId]; ok {
+		delete(m.inProgressMaps, args.MapId)
+		m.completedMaps[args.MapId] = true
 	}
 }
 
 func (m *Master) handleReduceCompletion(args *CompleteWorkArgs) {
-	if _, ok := m.inProgressReduce[args.ReduceId]; ok {
-		delete(m.inProgressReduce, args.ReduceId)
-		m.completedReduce[args.ReduceId] = true
+	if _, ok := m.inProgressReduces[args.ReduceId]; ok {
+		delete(m.inProgressReduces, args.ReduceId)
+		m.completedReduces[args.ReduceId] = true
 	}
 }
 
@@ -99,20 +86,17 @@ func makeRange(min, max int) []int {
 }
 
 func (m *Master) ServeMap(args *RequestWorkArgs, reply *RequestWorkReply) error {
-	var file string
-	var remainingFiles []string
-	file, remainingFiles = m.toStartFiles[0], m.toStartFiles[1:]
-	mapId := m.nextMapTaskIdx
-	m.nextMapTaskIdx += 1
-	m.toStartFiles = remainingFiles
-	m.inProgressFiles[file] = true
+	mapId, remainingMapId := m.toStartMaps[0], m.toStartMaps[1:]
+
+	m.toStartMaps = remainingMapId
+	m.inProgressMaps[mapId] = true
 
 	reply.WorkType = "map"
-	reply.FileName = file
+	reply.FileName = m.allFiles[mapId]
 	reply.MapId = mapId
 	reply.ReduceTotal = m.nReduce
-	time.AfterFunc(10 * time.Second, func() {
-		m.purgeMapAfterTimeout(file)
+	time.AfterFunc(10*time.Second, func() {
+		m.purgeMapAfterTimeout(mapId)
 	})
 
 	return nil
@@ -121,26 +105,26 @@ func (m *Master) ServeMap(args *RequestWorkArgs, reply *RequestWorkReply) error 
 func (m *Master) ServeReduce(args *RequestWorkArgs, reply *RequestWorkReply) error {
 	var reduceId int
 	var remainingReduceIds []int
-	reduceId, remainingReduceIds = m.toStartReduce[0], m.toStartReduce[1:]
-	m.toStartReduce = remainingReduceIds
-	m.inProgressReduce[reduceId] = true
+	reduceId, remainingReduceIds = m.toStartReduces[0], m.toStartReduces[1:]
+	m.toStartReduces = remainingReduceIds
+	m.inProgressReduces[reduceId] = true
 
 	reply.WorkType = "reduce"
 	reply.ReduceId = reduceId
-	time.AfterFunc(10 * time.Second, func() {
+	time.AfterFunc(10*time.Second, func() {
 		m.purgeReduceAfterTimeout(reduceId)
 	})
 
 	return nil
 }
 
-func (m *Master) purgeMapAfterTimeout(fileName string) {
+func (m *Master) purgeMapAfterTimeout(mapId int) {
 	m.accessLock.Lock()
 	m.accessLock.Unlock()
 
-	if _, ok := m.inProgressFiles[fileName]; ok {
-		delete(m.inProgressFiles, fileName)
-		m.toStartFiles = append(m.toStartFiles, fileName)
+	if _, ok := m.inProgressMaps[mapId]; ok {
+		delete(m.inProgressMaps, mapId)
+		m.toStartMaps = append(m.toStartMaps, mapId)
 	}
 }
 
@@ -148,12 +132,11 @@ func (m *Master) purgeReduceAfterTimeout(reduceId int) {
 	m.accessLock.Lock()
 	m.accessLock.Unlock()
 
-	if _, ok := m.inProgressReduce[reduceId]; ok {
-		delete(m.inProgressReduce, reduceId)
-		m.toStartReduce = append(m.toStartReduce, reduceId)
+	if _, ok := m.inProgressReduces[reduceId]; ok {
+		delete(m.inProgressReduces, reduceId)
+		m.toStartReduces = append(m.toStartReduces, reduceId)
 	}
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -178,7 +161,7 @@ func (m *Master) server() {
 func (m *Master) Done() bool {
 	m.accessLock.Lock()
 	defer m.accessLock.Unlock()
-	ret := len(m.completedReduce) == m.nReduce
+	ret := len(m.completedReduces) == m.nReduce
 	return ret
 }
 
@@ -189,23 +172,20 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{
-		inputFiles:   files,
-		nReduce:      nReduce,
-
-		toStartFiles:   files,
-		inProgressFiles:  make(map[string]bool),
-		completedFiles: make(map[string]bool),
-
-		inProgressReduce: make(map[int]bool),
-		completedReduce:  make(map[int]bool),
-
-		nextMapTaskIdx: 0,
+		inputFiles: files,
+		nReduce:    nReduce,
+		allFiles:   files,
 		isMapCompleted: false,
 
+		toStartMaps:    makeRange(0, len(files)-1),
+		inProgressMaps: make(map[int]bool),
+		completedMaps:  make(map[int]bool),
+
+		inProgressReduces: make(map[int]bool),
+		completedReduces:  make(map[int]bool),
 	}
 
 	// Your code here.
-
 
 	m.server()
 	return &m
