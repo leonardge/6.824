@@ -3,6 +3,7 @@ package mr
 import (
 	"log"
 	"sync"
+	"time"
 )
 import "net"
 import "os"
@@ -60,21 +61,33 @@ func (m *Master) ServeCompletion(args *CompleteWorkArgs, reply *CompleteWorkArgs
 	defer m.accessLock.Unlock()
 
 	if args.CompletionType == "map" {
-		delete(m.inProgressFiles, args.MapFileName)
-		m.completedFiles[args.MapFileName] = true
+		m.handleMapCompletion(args)
 		if len(m.completedFiles) == len(m.inputFiles) {
 			log.Printf("Map stage completed!")
-			m.toStartReduce = makeRange(0, m.nReduce - 1)
+			m.toStartReduce = makeRange(0, m.nReduce-1)
 			m.isMapCompleted = true
 		}
 	} else if args.CompletionType == "reduce" {
-		delete(m.inProgressReduce, args.ReduceId)
-		m.completedReduce[args.ReduceId] = true
+		m.handleReduceCompletion(args)
 	} else {
 		log.Fatalf("It shouldn't be here.")
 	}
 
 	return nil
+}
+
+func (m *Master) handleMapCompletion(args *CompleteWorkArgs) {
+	if _, ok := m.inProgressFiles[args.MapFileName]; ok {
+		delete(m.inProgressFiles, args.MapFileName)
+		m.completedFiles[args.MapFileName] = true
+	}
+}
+
+func (m *Master) handleReduceCompletion(args *CompleteWorkArgs) {
+	if _, ok := m.inProgressReduce[args.ReduceId]; ok {
+		delete(m.inProgressReduce, args.ReduceId)
+		m.completedReduce[args.ReduceId] = true
+	}
 }
 
 func makeRange(min, max int) []int {
@@ -98,6 +111,9 @@ func (m *Master) ServeMap(args *RequestWorkArgs, reply *RequestWorkReply) error 
 	reply.FileName = file
 	reply.MapId = mapId
 	reply.ReduceTotal = m.nReduce
+	time.AfterFunc(10 * time.Second, func() {
+		m.purgeMapAfterTimeout(file)
+	})
 
 	return nil
 }
@@ -111,8 +127,31 @@ func (m *Master) ServeReduce(args *RequestWorkArgs, reply *RequestWorkReply) err
 
 	reply.WorkType = "reduce"
 	reply.ReduceId = reduceId
+	time.AfterFunc(10 * time.Second, func() {
+		m.purgeReduceAfterTimeout(reduceId)
+	})
 
 	return nil
+}
+
+func (m *Master) purgeMapAfterTimeout(fileName string) {
+	m.accessLock.Lock()
+	m.accessLock.Unlock()
+
+	if _, ok := m.inProgressFiles[fileName]; ok {
+		delete(m.inProgressFiles, fileName)
+		m.toStartFiles = append(m.toStartFiles, fileName)
+	}
+}
+
+func (m *Master) purgeReduceAfterTimeout(reduceId int) {
+	m.accessLock.Lock()
+	m.accessLock.Unlock()
+
+	if _, ok := m.inProgressReduce[reduceId]; ok {
+		delete(m.inProgressReduce, reduceId)
+		m.toStartReduce = append(m.toStartReduce, reduceId)
+	}
 }
 
 
@@ -153,8 +192,8 @@ func MakeMaster(files []string, nReduce int) *Master {
 		inputFiles:   files,
 		nReduce:      nReduce,
 
-		toStartFiles: files,
-		inProgressFiles: make(map[string]bool),
+		toStartFiles:   files,
+		inProgressFiles:  make(map[string]bool),
 		completedFiles: make(map[string]bool),
 
 		inProgressReduce: make(map[int]bool),
