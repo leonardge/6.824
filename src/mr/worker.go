@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -141,10 +140,6 @@ func ReduceFiles(
 	return res
 }
 
-func isStringMatching(pattern string, str string) bool{
-	return regexp.MustCompile(pattern).MatchString(str)
-}
-
 func completeMap(fileName string) bool {
 	request := CompleteWorkArgs{CompletionType: "map", MapFileName: fileName}
 	reply := CompleteWorkReply{}
@@ -230,7 +225,7 @@ func writeResult(fileName string, keyvalues []KeyValue) {
 	for _, kv := range keyvalues {
 		fmt.Fprintf(file, "%v %v\n", kv.Key, kv.Value)
 	}
-	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s",fileName))
+	err = os.Rename(file.Name(), fmt.Sprintf("%s",fileName))
 	if err != nil {
 		log.Fatalf("error renaming %v", err)
 	}
