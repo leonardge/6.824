@@ -74,7 +74,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		if reply.WorkType == "reduce" {
 			kvs := readPartition(reply.ReduceId)
 			kvs = ReduceFiles(reducef, kvs)
-			writeKVs(fmt.Sprintf("mr-out-%d", reply.ReduceId), kvs)
+			writeResult(fmt.Sprintf("mr-out-%d", reply.ReduceId), kvs)
 			completeReduce(reply.ReduceId)
 		}
 
@@ -211,6 +211,24 @@ func writeKVs(fileName string, keyvalues []KeyValue) {
 		if err != nil {
 			return
 		}
+	}
+	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s",fileName))
+	if err != nil {
+		log.Fatalf("error renaming %v", err)
+	}
+	err = file.Close()
+	if err != nil {
+		log.Fatalf("error closing map file: %v", err)
+	}
+}
+
+func writeResult(fileName string, keyvalues []KeyValue) {
+	file, err := ioutil.TempFile("", "map")
+	if err != nil {
+		return
+	}
+	for _, kv := range keyvalues {
+		fmt.Fprintf(file, "%v %v\n", kv.Key, kv.Value)
 	}
 	err = os.Rename(file.Name(), fmt.Sprintf("./temp_map/%s",fileName))
 	if err != nil {
