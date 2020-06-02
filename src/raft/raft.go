@@ -133,6 +133,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	term         int
+	candidateId  int
+	lastLogIndex int
+	lastLogTerm  int
 }
 
 //
@@ -141,12 +145,34 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term        int
+	voteGranted bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	// Your code here (2A, 2B).
+}
+
+//
+// example AppendEntriesReply RPC arguments structure.
+// field names must start with capital letters!
+//
+type AppendEntriesArgs struct {
+	// Your data here (2A, 2B).
+}
+
+//
+// example AppendEntriesReply RPC reply structure.
+// field names must start with capital letters!
+//
+type AppendEntriesReply struct {
+	// Your data here (2A).
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (2A, 2B).
 }
 
@@ -181,6 +207,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -262,12 +293,44 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteCount = 0
 	rf.lastAppendEntriesReceivedTime = time.Now().Unix()
 
-	// TODO: start the background goroutine to send heartbeat if it is leader
-
-	// TODO: start the background goroutine to start new vote if it is follower and haven't heard from leader
-
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	// TODO: start the background goroutine to send heartbeat if it is leader
+	go func() {
+		rf.StartAppendEntriesLoop()
+	}()
+
+	// TODO: start the background goroutine to start new vote if it is follower and haven't heard from leader
+	go func() {
+		rf.StartRequestVoteLoop()
+	}()
+
 	return rf
+}
+
+func (rf *Raft) StartAppendEntriesLoop() {
+	// TODO: think about locking inside
+	for !rf.killed() {
+		if rf.role == 0 {
+			for peerIdx := range rf.peers {
+				go func() {
+					appendEntriesArgs := AppendEntriesArgs{}
+					appendEntriesReply := AppendEntriesReply{}
+					rf.sendAppendEntries(peerIdx, &appendEntriesArgs, &appendEntriesReply)
+				}()
+			}
+
+		}
+		time.Sleep(time.Second * 100)
+	}
+}
+
+func (rf *Raft) StartRequestVoteLoop() {
+	// TODO: think about locking inside
+	for !rf.killed() {
+		if rf.role == 2 {
+		}
+		time.Sleep(time.Second * 200)
+	}
 }
