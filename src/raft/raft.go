@@ -310,18 +310,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 func (rf *Raft) StartAppendEntriesLoop() {
-	// TODO: think about locking inside
 	for !rf.killed() {
+		rf.mu.Lock()
 		if rf.role == 0 {
 			for peerIdx := range rf.peers {
-				go func() {
+				// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
+				go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int) {
+					// TODO: think about locking inside
 					appendEntriesArgs := AppendEntriesArgs{}
 					appendEntriesReply := AppendEntriesReply{}
 					rf.sendAppendEntries(peerIdx, &appendEntriesArgs, &appendEntriesReply)
-				}()
+				}(rf.currentTerm, rf.me, 0, 0, nil, 0)
 			}
-
 		}
+		rf.mu.Unlock()
 		time.Sleep(time.Second * 100)
 	}
 }
@@ -329,8 +331,31 @@ func (rf *Raft) StartAppendEntriesLoop() {
 func (rf *Raft) StartRequestVoteLoop() {
 	// TODO: think about locking inside
 	for !rf.killed() {
-		if rf.role == 2 {
+		rf.mu.Lock()
+		if rf.role == 2 && rf.exceedElectionTimeout(){
+			for peerIdx := range rf.peers {
+				// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
+				go func(term int, candidateId int, lastLogIndex int, lastLogTerm int) {
+					// TODO: think about locking inside
+					requestVoteArgs := RequestVoteArgs{
+						term: term,
+						candidateId: candidateId,
+						lastLogIndex: lastLogIndex,
+						lastLogTerm: lastLogTerm,
+					}
+					requestVoteReply := RequestVoteReply{}
+					rf.sendRequestVote(peerIdx, &requestVoteArgs, &requestVoteReply)
+					// handle the reply...
+				} (rf.currentTerm, rf.me, len(rf.log), 0)
+			}
 		}
+		rf.mu.Unlock()
 		time.Sleep(time.Second * 200)
 	}
+}
+
+func (rf *Raft) exceedElectionTimeout() bool {
+	currentTime := time.Now()
+	elapsed := currentTime.Sub(time.Unix(rf.lastAppendEntriesReceivedTime, 0))
+	return elapsed > time.Second * 200
 }
