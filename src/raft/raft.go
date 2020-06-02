@@ -17,14 +17,15 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 import "sync/atomic"
 import "../labrpc"
 
 // import "bytes"
 // import "../labgob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -57,6 +58,25 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// persistent state
+	currentTerm int
+	votedFor    int
+	log         []interface{}
+
+	// volatile state
+	commitIndex int
+	lastApplied int
+
+	// volatile state on leader
+	nextIndex  []int
+	matchIndex []int
+
+	// additional state
+	role                          int // 0 means leader, 1 means candidate and 2 means follower
+	voteCount                     int // the number of votes received as candidate
+	lastAppendEntriesReceivedTime int64
+
+	// TODO: it is probably also a good idea to store the config, e.g. timeout in here
 }
 
 // return currentTerm and whether this server
@@ -85,7 +105,6 @@ func (rf *Raft) persist() {
 	// rf.persister.SaveRaftState(data)
 }
 
-
 //
 // restore previously persisted state.
 //
@@ -107,9 +126,6 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.yyy = yyy
 	// }
 }
-
-
-
 
 //
 // example RequestVote RPC arguments structure.
@@ -168,7 +184,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -189,7 +204,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -234,10 +248,26 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.log = make([]interface{}, 0)
+
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+
+	rf.nextIndex = make([]int, 0)
+	rf.matchIndex = make([]int, 0)
+
+	rf.role = 2
+	rf.voteCount = 0
+	rf.lastAppendEntriesReceivedTime = time.Now().Unix()
+
+	// TODO: start the background goroutine to send heartbeat if it is leader
+
+	// TODO: start the background goroutine to start new vote if it is follower and haven't heard from leader
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
