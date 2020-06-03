@@ -154,6 +154,23 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+
+	reply.term = rf.currentTerm
+	if args.term < rf.currentTerm {
+		reply.voteGranted = false
+		return
+	}
+
+	// TODO: added condition to check for log up-to-date-ness.
+	if rf.votedFor == -1 || rf.votedFor == args.candidateId {
+		rf.votedFor = args.candidateId
+		reply.voteGranted = false
+		return
+	}
+
 }
 
 //
@@ -296,12 +313,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// TODO: start the background goroutine to send heartbeat if it is leader
 	go func() {
 		rf.StartAppendEntriesLoop()
 	}()
 
-	// TODO: start the background goroutine to start new vote if it is follower and haven't heard from leader
 	go func() {
 		rf.StartRequestVoteLoop()
 	}()
