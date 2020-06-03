@@ -7,10 +7,10 @@ package raft
 //
 // rf = Make(...)
 //   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
+// rf.Start(command interface{}) (index, Term, isleader)
 //   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
+// rf.GetState() (Term, isLeader)
+//   ask a Raft for its current Term, and whether it thinks it is leader
 // ApplyMsg
 //   each time a new entry is committed to the log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
@@ -18,6 +18,9 @@ package raft
 //
 
 import (
+	"fmt"
+	"log"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -60,7 +63,7 @@ type Raft struct {
 
 	// persistent state
 	currentTerm int
-	votedFor    int  // -1 signal for not voted yet.
+	votedFor    int // -1 signal for not voted yet.
 	log         []interface{}
 
 	// volatile state
@@ -86,6 +89,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.mu.Lock()
+	term = rf.currentTerm
+	isleader = rf.role == 0
+	rf.mu.Unlock()
+
 	return term, isleader
 }
 
@@ -133,10 +141,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	term         int
-	candidateId  int
-	lastLogIndex int
-	lastLogTerm  int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -145,8 +153,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 }
 
 //
@@ -157,23 +165,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if args.term < rf.currentTerm {
-		reply.term = rf.currentTerm
-		reply.voteGranted = false
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
 		return
 	}
 
-	if args.term > rf.currentTerm {
-		rf.currentTerm = args.term
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
 		rf.role = 2
 		rf.votedFor = -1
 		rf.voteCount = 0
 	}
 
 	// TODO: added condition to check for log up-to-date-ness.
-	if rf.votedFor == -1 || rf.votedFor == args.candidateId {
-		rf.votedFor = args.candidateId
-		reply.voteGranted = false
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
 		return
 	}
 
@@ -185,6 +193,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 type AppendEntriesArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []interface{}
+	LeaderCommit int
 }
 
 //
@@ -193,10 +207,29 @@ type AppendEntriesArgs struct {
 //
 type AppendEntriesReply struct {
 	// Your data here (2A).
+	Term    int
+	Success bool
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term >= rf.currentTerm {
+		rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
+		log.Printf("received append from id: %d term: %d : %s, time: %d", args.LeaderId, args.Term, rf.getStateString(), rf.lastAppendEntriesReceivedTime)
+		if args.Term > rf.currentTerm {
+			rf.currentTerm = args.Term
+			rf.role = 2
+			rf.votedFor = -1
+			rf.voteCount = 0
+			return
+		}
+	}
+
+
+
 }
 
 //
@@ -249,7 +282,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 //
 // the first return value is the index that the command will appear at
 // if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
+// Term. the third return value is true if this server believes it is
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
@@ -314,7 +347,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.role = 2
 	rf.voteCount = 0
-	rf.lastAppendEntriesReceivedTime = time.Now().Unix()
+	rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -337,19 +370,28 @@ func (rf *Raft) StartAppendEntriesLoop() {
 			rf.broadcastAppendEntries()
 		}
 		rf.mu.Unlock()
-		time.Sleep(time.Second * 100)
+		time.Sleep(time.Millisecond * 150)
 	}
 }
 
 func (rf *Raft) broadcastAppendEntries() {
+	log.Printf("BroadcastAppendEntries: %s", rf.getStateString())
 	for peerIdx := range rf.peers {
 		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-		go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int) {
+		go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int, receiverId int) {
 			// TODO: think about locking inside
-			appendEntriesArgs := AppendEntriesArgs{}
+			appendEntriesArgs := AppendEntriesArgs{
+				Term: term,
+				LeaderId:leaderId,
+				PrevLogIndex:prevLogIndex,
+				PrevLogTerm:prevLogTerm,
+				Entries:entries,
+				LeaderCommit:leaderCommit,
+			}
 			appendEntriesReply := AppendEntriesReply{}
-			rf.sendAppendEntries(peerIdx, &appendEntriesArgs, &appendEntriesReply)
-		}(rf.currentTerm, rf.me, 0, 0, nil, 0)
+			rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
+		// TODO: update the argument for function.
+		}(rf.currentTerm, rf.me, 0, 0, nil, 0, peerIdx)
 	}
 }
 
@@ -357,37 +399,40 @@ func (rf *Raft) StartRequestVoteLoop() {
 	// TODO: think about locking inside
 	for !rf.killed() {
 		rf.mu.Lock()
+
 		// Follower Timeout and start election
-		if rf.role == 2 && rf.votedFor == -1 && rf.exceedElectionTimeout()  {
+		if rf.role == 2 && rf.votedFor == -1 && rf.exceedElectionTimeout() {
 			rf.StartElection()
 		} else if rf.role == 1 && rf.exceedElectionTimeout() { // Candidate election timeout
 			rf.StartElection()
 		}
 
 		rf.mu.Unlock()
-		time.Sleep(time.Second * 200)
+		time.Sleep(time.Millisecond * time.Duration(400 + rand.Intn(300)))
 	}
 }
 
 func (rf *Raft) StartElection() {
+
 	rf.currentTerm += 1
 
 	rf.votedFor = rf.me
 	rf.voteCount = 1
 
-	rf.lastAppendEntriesReceivedTime = time.Now().Unix()
+	rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
 
 	rf.role = 1
 
+	log.Printf("start election: %s", rf.getStateString())
 	for peerIdx := range rf.peers {
 		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int) {
+		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int, receiverIdx int) {
 			// TODO: think about locking inside
 			requestVoteArgs := RequestVoteArgs{
-				term:         term,
-				candidateId:  candidateId,
-				lastLogIndex: lastLogIndex,
-				lastLogTerm:  lastLogTerm,
+				Term:         term,
+				CandidateId:  candidateId,
+				LastLogIndex: lastLogIndex,
+				LastLogTerm:  lastLogTerm,
 			}
 			requestVoteReply := RequestVoteReply{}
 			rf.sendRequestVote(peerIdx, &requestVoteArgs, &requestVoteReply)
@@ -396,29 +441,37 @@ func (rf *Raft) StartElection() {
 			defer rf.mu.Unlock()
 
 			// handle the reply...
-			if requestVoteReply.term > rf.currentTerm {
-				rf.currentTerm = requestVoteReply.term
+			if requestVoteReply.Term > rf.currentTerm {
+				rf.currentTerm = requestVoteReply.Term
 				rf.role = 2
 				rf.votedFor = -1
 				rf.voteCount = 0
 				return
 			}
 
-			if requestVoteReply.voteGranted {
+			if requestVoteReply.VoteGranted {
 				rf.voteCount += 1
-				if rf.role == 1 && rf.voteCount > (len(rf.peers)/2 + 1) {
+				log.Printf("Collected one vote: %s", rf.getStateString())
+				if rf.role == 1 && rf.voteCount > (len(rf.peers)/2+1) {
+					log.Printf("Becomes leader: %s", rf.getStateString())
 					rf.role = 0
 					rf.broadcastAppendEntries()
 				}
 				return
 			}
 
-		}(rf.currentTerm, rf.me, len(rf.log), 0)
+		}(rf.currentTerm, rf.me, len(rf.log), 0, peerIdx)
 	}
 }
 
 func (rf *Raft) exceedElectionTimeout() bool {
-	currentTime := time.Now()
-	elapsed := currentTime.Sub(time.Unix(rf.lastAppendEntriesReceivedTime, 0))
-	return elapsed > time.Second * 200
+	//currentTime := time.Now()
+	elapsed := time.Since(time.Unix(0, rf.lastAppendEntriesReceivedTime))
+	log.Printf("time: %d elapsed: %v, rf: %s", rf.lastAppendEntriesReceivedTime, elapsed, rf.getStateString())
+	return elapsed > (time.Millisecond*time.Duration(400))
+}
+
+// This needs to be called while mutex is held.
+func (rf *Raft) getStateString() string {
+	return fmt.Sprintf("term: %d, id: %d", rf.currentTerm, rf.me)
 }
