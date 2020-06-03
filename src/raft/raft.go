@@ -60,7 +60,7 @@ type Raft struct {
 
 	// persistent state
 	currentTerm int
-	votedFor    int
+	votedFor    int  // -1 signal for not voted yet.
 	log         []interface{}
 
 	// volatile state
@@ -157,11 +157,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-
-	reply.term = rf.currentTerm
 	if args.term < rf.currentTerm {
+		reply.term = rf.currentTerm
 		reply.voteGranted = false
 		return
+	}
+
+	if args.term > rf.currentTerm {
+		rf.currentTerm = args.term
+		rf.role = 2
+		rf.votedFor = -1
+		rf.voteCount = 0
 	}
 
 	// TODO: added condition to check for log up-to-date-ness.
@@ -328,18 +334,22 @@ func (rf *Raft) StartAppendEntriesLoop() {
 	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.role == 0 {
-			for peerIdx := range rf.peers {
-				// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-				go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int) {
-					// TODO: think about locking inside
-					appendEntriesArgs := AppendEntriesArgs{}
-					appendEntriesReply := AppendEntriesReply{}
-					rf.sendAppendEntries(peerIdx, &appendEntriesArgs, &appendEntriesReply)
-				}(rf.currentTerm, rf.me, 0, 0, nil, 0)
-			}
+			rf.broadcastAppendEntries()
 		}
 		rf.mu.Unlock()
 		time.Sleep(time.Second * 100)
+	}
+}
+
+func (rf *Raft) broadcastAppendEntries() {
+	for peerIdx := range rf.peers {
+		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
+		go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int) {
+			// TODO: think about locking inside
+			appendEntriesArgs := AppendEntriesArgs{}
+			appendEntriesReply := AppendEntriesReply{}
+			rf.sendAppendEntries(peerIdx, &appendEntriesArgs, &appendEntriesReply)
+		}(rf.currentTerm, rf.me, 0, 0, nil, 0)
 	}
 }
 
@@ -347,25 +357,63 @@ func (rf *Raft) StartRequestVoteLoop() {
 	// TODO: think about locking inside
 	for !rf.killed() {
 		rf.mu.Lock()
-		if rf.role == 2 && rf.exceedElectionTimeout(){
-			for peerIdx := range rf.peers {
-				// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-				go func(term int, candidateId int, lastLogIndex int, lastLogTerm int) {
-					// TODO: think about locking inside
-					requestVoteArgs := RequestVoteArgs{
-						term: term,
-						candidateId: candidateId,
-						lastLogIndex: lastLogIndex,
-						lastLogTerm: lastLogTerm,
-					}
-					requestVoteReply := RequestVoteReply{}
-					rf.sendRequestVote(peerIdx, &requestVoteArgs, &requestVoteReply)
-					// handle the reply...
-				} (rf.currentTerm, rf.me, len(rf.log), 0)
-			}
+		// Follower Timeout and start election
+		if rf.role == 2 && rf.votedFor == -1 && rf.exceedElectionTimeout()  {
+			rf.StartElection()
+		} else if rf.role == 1 && rf.exceedElectionTimeout() { // Candidate election timeout
+			rf.StartElection()
 		}
+
 		rf.mu.Unlock()
 		time.Sleep(time.Second * 200)
+	}
+}
+
+func (rf *Raft) StartElection() {
+	rf.currentTerm += 1
+
+	rf.votedFor = rf.me
+	rf.voteCount = 1
+
+	rf.lastAppendEntriesReceivedTime = time.Now().Unix()
+
+	rf.role = 1
+
+	for peerIdx := range rf.peers {
+		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
+		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int) {
+			// TODO: think about locking inside
+			requestVoteArgs := RequestVoteArgs{
+				term:         term,
+				candidateId:  candidateId,
+				lastLogIndex: lastLogIndex,
+				lastLogTerm:  lastLogTerm,
+			}
+			requestVoteReply := RequestVoteReply{}
+			rf.sendRequestVote(peerIdx, &requestVoteArgs, &requestVoteReply)
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			// handle the reply...
+			if requestVoteReply.term > rf.currentTerm {
+				rf.currentTerm = requestVoteReply.term
+				rf.role = 2
+				rf.votedFor = -1
+				rf.voteCount = 0
+				return
+			}
+
+			if requestVoteReply.voteGranted {
+				rf.voteCount += 1
+				if rf.role == 1 && rf.voteCount > (len(rf.peers)/2 + 1) {
+					rf.role = 0
+					rf.broadcastAppendEntries()
+				}
+				return
+			}
+
+		}(rf.currentTerm, rf.me, len(rf.log), 0)
 	}
 }
 
