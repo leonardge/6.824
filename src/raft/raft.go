@@ -185,15 +185,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.voteCount = 0
 	}
 
-	// TODO: added condition to check for log up-to-date-ness.
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
-		(args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm())  {
+		  rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
 		return
 	}
 
+}
+
+func (rf *Raft) isLogUpToDate(lastLogIndex int, lastLogTerm int) bool {
+	return lastLogIndex >= rf.getLastLogIndex() && lastLogTerm >= rf.getLastLogTerm()
 }
 
 //
