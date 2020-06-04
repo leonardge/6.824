@@ -359,13 +359,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	go func() {
-		rf.StartAppendEntriesLoop()
-	}()
+	go rf.StartAppendEntriesLoop()
 
-	go func() {
-		rf.StartRequestVoteLoop()
-	}()
+	go rf.StartRequestVoteLoop()
 
 	return rf
 }
@@ -383,22 +379,24 @@ func (rf *Raft) StartAppendEntriesLoop() {
 
 func (rf *Raft) broadcastAppendEntries() {
 	for peerIdx := range rf.peers {
-		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-		go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int, receiverId int) {
-			// TODO: think about locking inside
-			appendEntriesArgs := AppendEntriesArgs{
-				Term: term,
-				LeaderId:leaderId,
-				PrevLogIndex:prevLogIndex,
-				PrevLogTerm:prevLogTerm,
-				Entries:entries,
-				LeaderCommit:leaderCommit,
-			}
-			appendEntriesReply := AppendEntriesReply{}
-			rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
-		// TODO: update the argument for function.
-		}(rf.currentTerm, rf.me, 0, 0, nil, 0, peerIdx)
+		// Passed all the parameters in to avoid the parameters change when the go routine is executed.
+		go rf.sendAndProcessAppendEntriesRPC(rf.currentTerm, rf.me, 0, 0, nil, 0, peerIdx)
 	}
+}
+
+func (rf *Raft) sendAndProcessAppendEntriesRPC(
+	term int, leaderId int, prevLogIndex int, prevLogTerm int,
+	entries []interface{}, leaderCommit int, receiverId int) {
+	appendEntriesArgs := AppendEntriesArgs{
+		Term: term,
+		LeaderId:leaderId,
+		PrevLogIndex:prevLogIndex,
+		PrevLogTerm:prevLogTerm,
+		Entries:entries,
+		LeaderCommit:leaderCommit,
+	}
+	appendEntriesReply := AppendEntriesReply{}
+	rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
 }
 
 func (rf *Raft) StartRequestVoteLoop() {
@@ -437,43 +435,44 @@ func (rf *Raft) StartElection() {
 			continue
 		}
 
-		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
-		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int, receiverIdx int) {
-			// TODO: think about locking inside
-			requestVoteArgs := RequestVoteArgs{
-				Term:         term,
-				CandidateId:  candidateId,
-				LastLogIndex: lastLogIndex,
-				LastLogTerm:  lastLogTerm,
-			}
-			requestVoteReply := RequestVoteReply{}
-			rf.sendRequestVote(receiverIdx, &requestVoteArgs, &requestVoteReply)
-
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-
-			// handle the reply...
-			if requestVoteReply.Term > rf.currentTerm {
-				rf.currentTerm = requestVoteReply.Term
-				rf.role = 2
-				rf.votedFor = -1
-				rf.voteCount = 0
-				return
-			}
-
-			if requestVoteReply.VoteGranted && requestVoteReply.Term == rf.currentTerm {
-				rf.voteCount += 1
-				log.Printf("Collected one vote: %s", rf.getStateString())
-				if rf.role == 1 && rf.voteCount >= (len(rf.peers)/2+1) {
-					log.Printf("Becomes leader: %s", rf.getStateString())
-					rf.role = 0
-					rf.broadcastAppendEntries()
-				}
-				return
-			}
-
-		}(rf.currentTerm, rf.me, len(rf.log), 0, peerIdx)
+		// Passed all the parameters in is to avoid the parameters change when the go routine is executed.
+		go rf.sendAndProcessRequestVoteRPC(rf.currentTerm, rf.me, len(rf.log), 0, peerIdx)
 	}
+}
+
+func (rf *Raft) sendAndProcessRequestVoteRPC(term int, candidateId int, lastLogIndex int, lastLogTerm int, receiverIdx int) {
+	requestVoteArgs := RequestVoteArgs{
+		Term:         term,
+		CandidateId:  candidateId,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+	requestVoteReply := RequestVoteReply{}
+	rf.sendRequestVote(receiverIdx, &requestVoteArgs, &requestVoteReply)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// handle the reply...
+	if requestVoteReply.Term > rf.currentTerm {
+		rf.currentTerm = requestVoteReply.Term
+		rf.role = 2
+		rf.votedFor = -1
+		rf.voteCount = 0
+		return
+	}
+
+	if requestVoteReply.VoteGranted && requestVoteReply.Term == rf.currentTerm {
+		rf.voteCount += 1
+		log.Printf("Collected one vote: %s", rf.getStateString())
+		if rf.role == 1 && rf.voteCount >= (len(rf.peers)/2+1) {
+			log.Printf("Becomes leader: %s", rf.getStateString())
+			rf.role = 0
+			rf.broadcastAppendEntries()
+		}
+		return
+	}
+
 }
 
 func (rf *Raft) exceedElectionTimeout() bool {
