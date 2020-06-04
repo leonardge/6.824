@@ -223,7 +223,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
 		rf.votedFor = -1
 
-
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.role = 2
@@ -232,8 +231,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			return
 		}
 	}
-
-
 
 }
 
@@ -388,12 +385,12 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 	term int, leaderId int, prevLogIndex int, prevLogTerm int,
 	entries []interface{}, leaderCommit int, receiverId int) {
 	appendEntriesArgs := AppendEntriesArgs{
-		Term: term,
-		LeaderId:leaderId,
-		PrevLogIndex:prevLogIndex,
-		PrevLogTerm:prevLogTerm,
-		Entries:entries,
-		LeaderCommit:leaderCommit,
+		Term:         term,
+		LeaderId:     leaderId,
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm:  prevLogTerm,
+		Entries:      entries,
+		LeaderCommit: leaderCommit,
 	}
 	appendEntriesReply := AppendEntriesReply{}
 	rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
@@ -406,15 +403,15 @@ func (rf *Raft) StartRequestVoteLoop() {
 
 		// Follower Timeout and start election
 		if rf.role == 2 && rf.votedFor == -1 && rf.exceedElectionTimeout() {
-			fmt.Printf("Follower becomes candidate: %s\n", rf.getStateString())
+			// fmt.Printf("Follower becomes candidate: %s\n", rf.getStateString())
 			rf.StartElection()
 		} else if rf.role == 1 && rf.exceedElectionTimeout() { // Candidate election timeout
-			fmt.Printf("Candidate election timeout: %s\n", rf.getStateString())
+			// fmt.Printf("Candidate election timeout: %s\n", rf.getStateString())
 			rf.StartElection()
 		}
 
 		rf.mu.Unlock()
-		time.Sleep(time.Millisecond * time.Duration(400 + rand.Intn(400)))
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -477,7 +474,7 @@ func (rf *Raft) sendAndProcessRequestVoteRPC(term int, candidateId int, lastLogI
 
 func (rf *Raft) exceedElectionTimeout() bool {
 	elapsed := time.Since(time.Unix(0, rf.lastAppendEntriesReceivedTime))
-	return elapsed > (time.Millisecond*time.Duration(400))
+	return elapsed > (time.Millisecond * time.Duration(400+rand.Intn(400)))
 }
 
 // This needs to be called while mutex is held.
