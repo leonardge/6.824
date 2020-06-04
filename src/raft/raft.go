@@ -83,8 +83,8 @@ type Raft struct {
 }
 
 type LogEntry struct {
-	command interface{}
-	term    int
+	Command interface{}
+	Term    int
 }
 
 // return currentTerm and whether this server
@@ -170,7 +170,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Printf("request vote: %s, args: %v", rf.getStateString(), args)
+	//log.Printf("request vote: %s, args: %v", rf.getStateString(), args)
 
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
@@ -186,7 +186,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// TODO: added condition to check for log up-to-date-ness.
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+		(args.LastLogIndex >= rf.getLastLogIndex() && args.LastLogTerm >= rf.getLastLogTerm())  {
 		rf.votedFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
@@ -205,7 +206,7 @@ type AppendEntriesArgs struct {
 	LeaderId     int
 	PrevLogIndex int
 	PrevLogTerm  int
-	Entries      []interface{}
+	Entries      []LogEntry
 	LeaderCommit int
 }
 
@@ -298,7 +299,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
+	rf.mu.Lock()
+	index = rf.getLastLogIndex() + 1
+	term = rf.currentTerm
+	isLeader = rf.role == 0
+	rf.mu.Unlock()
 	return index, term, isLeader
 }
 
@@ -387,8 +392,8 @@ func (rf *Raft) broadcastAppendEntries() {
 }
 
 func (rf *Raft) sendAndProcessAppendEntriesRPC(
-	term int, leaderId int, prevLogIndex int, prevLogTerm int,
-	entries []interface{}, leaderCommit int, receiverId int) {
+		term int, leaderId int, prevLogIndex int, prevLogTerm int,
+		entries []LogEntry, leaderCommit int, receiverId int) {
 	appendEntriesArgs := AppendEntriesArgs{
 		Term:         term,
 		LeaderId:     leaderId,
@@ -402,7 +407,6 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 }
 
 func (rf *Raft) StartRequestVoteLoop() {
-	// TODO: think about locking inside
 	for !rf.killed() {
 		rf.mu.Lock()
 
@@ -431,7 +435,7 @@ func (rf *Raft) StartElection() {
 
 	rf.role = 1
 
-	log.Printf("start election: %s", rf.getStateString())
+	//log.Printf("start election: %s", rf.getStateString())
 	for peerIdx := range rf.peers {
 		if peerIdx == rf.me {
 			continue
@@ -466,7 +470,7 @@ func (rf *Raft) sendAndProcessRequestVoteRPC(term int, candidateId int, lastLogI
 
 	if requestVoteReply.VoteGranted && requestVoteReply.Term == rf.currentTerm {
 		rf.voteCount += 1
-		log.Printf("Collected one vote: %s", rf.getStateString())
+		//log.Printf("Collected one vote: %s", rf.getStateString())
 		if rf.role == 1 && rf.voteCount >= (len(rf.peers)/2+1) {
 			log.Printf("Becomes leader: %s", rf.getStateString())
 			rf.role = 0
@@ -487,7 +491,10 @@ func (rf *Raft) getLastLogIndex() int {
 }
 
 func (rf *Raft) getLastLogTerm() int {
-	return rf.log[len(rf.log) - 1].term
+	if len(rf.log) == 0 {
+		return 0
+	}
+	return rf.log[len(rf.log) - 1].Term
 }
 
 // This needs to be called while mutex is held.
