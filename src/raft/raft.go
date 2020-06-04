@@ -181,6 +181,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// TODO: added condition to check for log up-to-date-ness.
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		rf.votedFor = args.CandidateId
+		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
 		return
 	}
@@ -218,7 +219,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Term >= rf.currentTerm {
 		rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
-		log.Printf("received append from id: %d term: %d : %s, time: %d", args.LeaderId, args.Term, rf.getStateString(), rf.lastAppendEntriesReceivedTime)
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.role = 2
@@ -375,7 +375,6 @@ func (rf *Raft) StartAppendEntriesLoop() {
 }
 
 func (rf *Raft) broadcastAppendEntries() {
-	log.Printf("BroadcastAppendEntries: %s", rf.getStateString())
 	for peerIdx := range rf.peers {
 		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
 		go func(term int, leaderId int, prevLogIndex int, prevLogTerm int, entries []interface{}, leaderCommit int, receiverId int) {
@@ -423,7 +422,7 @@ func (rf *Raft) StartElection() {
 
 	rf.role = 1
 
-	log.Printf("start election: %s", rf.getStateString())
+	log.Printf("start election: %s at %v", rf.getStateString(), time.Unix(0, rf.lastAppendEntriesReceivedTime))
 	for peerIdx := range rf.peers {
 		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
 		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int, receiverIdx int) {
@@ -449,7 +448,7 @@ func (rf *Raft) StartElection() {
 				return
 			}
 
-			if requestVoteReply.VoteGranted {
+			if requestVoteReply.VoteGranted && requestVoteReply.Term == rf.currentTerm {
 				rf.voteCount += 1
 				log.Printf("Collected one vote: %s", rf.getStateString())
 				if rf.role == 1 && rf.voteCount > (len(rf.peers)/2+1) {
@@ -467,7 +466,6 @@ func (rf *Raft) StartElection() {
 func (rf *Raft) exceedElectionTimeout() bool {
 	//currentTime := time.Now()
 	elapsed := time.Since(time.Unix(0, rf.lastAppendEntriesReceivedTime))
-	log.Printf("time: %d elapsed: %v, rf: %s", rf.lastAppendEntriesReceivedTime, elapsed, rf.getStateString())
 	return elapsed > (time.Millisecond*time.Duration(400))
 }
 
