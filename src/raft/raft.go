@@ -64,7 +64,7 @@ type Raft struct {
 	// persistent state
 	currentTerm int
 	votedFor    int // -1 signal for not voted yet.
-	log         []interface{}
+	log         []LogEntry
 
 	// volatile state
 	commitIndex int
@@ -80,6 +80,11 @@ type Raft struct {
 	lastAppendEntriesReceivedTime int64
 
 	// TODO: it is probably also a good idea to store the config, e.g. timeout in here
+}
+
+type LogEntry struct {
+	command interface{}
+	term    int
 }
 
 // return currentTerm and whether this server
@@ -341,7 +346,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.log = make([]interface{}, 0)
+	rf.log = make([]LogEntry, 0)
 
 	rf.commitIndex = 0
 	rf.lastApplied = 0
@@ -475,6 +480,14 @@ func (rf *Raft) sendAndProcessRequestVoteRPC(term int, candidateId int, lastLogI
 func (rf *Raft) exceedElectionTimeout() bool {
 	elapsed := time.Since(time.Unix(0, rf.lastAppendEntriesReceivedTime))
 	return elapsed > (time.Millisecond * time.Duration(400+rand.Intn(400)))
+}
+
+func (rf *Raft) getLastLogIndex() int {
+	return len(rf.log)
+}
+
+func (rf *Raft) getLastLogTerm() int {
+	return rf.log[len(rf.log) - 1].term
 }
 
 // This needs to be called while mutex is held.
