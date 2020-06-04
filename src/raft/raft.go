@@ -165,6 +165,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	log.Printf("request vote: %s, args: %v", rf.getStateString(), args)
+
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -219,6 +221,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Term >= rf.currentTerm {
 		rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
+		rf.votedFor = -1
+
+
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.role = 2
@@ -329,6 +334,8 @@ func (rf *Raft) killed() bool {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -401,13 +408,15 @@ func (rf *Raft) StartRequestVoteLoop() {
 
 		// Follower Timeout and start election
 		if rf.role == 2 && rf.votedFor == -1 && rf.exceedElectionTimeout() {
+			fmt.Printf("Follower becomes candidate: %s\n", rf.getStateString())
 			rf.StartElection()
 		} else if rf.role == 1 && rf.exceedElectionTimeout() { // Candidate election timeout
+			fmt.Printf("Candidate election timeout: %s\n", rf.getStateString())
 			rf.StartElection()
 		}
 
 		rf.mu.Unlock()
-		time.Sleep(time.Millisecond * time.Duration(400 + rand.Intn(300)))
+		time.Sleep(time.Millisecond * time.Duration(400 + rand.Intn(400)))
 	}
 }
 
@@ -422,8 +431,12 @@ func (rf *Raft) StartElection() {
 
 	rf.role = 1
 
-	log.Printf("start election: %s at %v", rf.getStateString(), time.Unix(0, rf.lastAppendEntriesReceivedTime))
+	log.Printf("start election: %s", rf.getStateString())
 	for peerIdx := range rf.peers {
+		if peerIdx == rf.me {
+			continue
+		}
+
 		// So I passed all the parameters in is to avoid the parameters change when the go routine is executed.
 		go func(term int, candidateId int, lastLogIndex int, lastLogTerm int, receiverIdx int) {
 			// TODO: think about locking inside
@@ -434,7 +447,7 @@ func (rf *Raft) StartElection() {
 				LastLogTerm:  lastLogTerm,
 			}
 			requestVoteReply := RequestVoteReply{}
-			rf.sendRequestVote(peerIdx, &requestVoteArgs, &requestVoteReply)
+			rf.sendRequestVote(receiverIdx, &requestVoteArgs, &requestVoteReply)
 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -451,7 +464,7 @@ func (rf *Raft) StartElection() {
 			if requestVoteReply.VoteGranted && requestVoteReply.Term == rf.currentTerm {
 				rf.voteCount += 1
 				log.Printf("Collected one vote: %s", rf.getStateString())
-				if rf.role == 1 && rf.voteCount > (len(rf.peers)/2+1) {
+				if rf.role == 1 && rf.voteCount >= (len(rf.peers)/2+1) {
 					log.Printf("Becomes leader: %s", rf.getStateString())
 					rf.role = 0
 					rf.broadcastAppendEntries()
@@ -464,7 +477,6 @@ func (rf *Raft) StartElection() {
 }
 
 func (rf *Raft) exceedElectionTimeout() bool {
-	//currentTime := time.Now()
 	elapsed := time.Since(time.Unix(0, rf.lastAppendEntriesReceivedTime))
 	return elapsed > (time.Millisecond*time.Duration(400))
 }
