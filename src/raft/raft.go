@@ -228,19 +228,46 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+
+	if args.PrevLogIndex != 0 && rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+
 	if args.Term >= rf.currentTerm {
 		rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
 		rf.votedFor = -1
+
 
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.role = 2
 			rf.votedFor = -1
 			rf.voteCount = 0
-			return
 		}
+
+		if args.LeaderCommit > rf.commitIndex {
+			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries))
+		}
+
+		rf.log = append(rf.log[:args.PrevLogIndex], args.Entries...)
+		reply.Success = true
+		reply.Term = rf.currentTerm
 	}
 
+}
+
+func min(num1 int, num2 int) int {
+	if num1 < num2 {
+		return num1
+	}
+	return num2
 }
 
 //
@@ -297,6 +324,10 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	if rf.killed() {
+		return -1, -1, false
+	}
+
 	index := -1
 	term := -1
 	isLeader := true
@@ -306,7 +337,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
 	isLeader = rf.role == 0
+	rf.log = append(rf.log, LogEntry{
+		Command: command,
+		Term:    rf.currentTerm,
+	})
 	rf.mu.Unlock()
+
 	return index, term, isLeader
 }
 
@@ -359,8 +395,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
-	rf.nextIndex = make([]int, 0)
-	rf.matchIndex = make([]int, 0)
+	rf.nextIndex = initializeNextIndex(len(peers))
+	rf.matchIndex = initializeMatchIndex(len(peers))
 
 	rf.role = 2
 	rf.voteCount = 0
@@ -376,6 +412,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
+func initializeMatchIndex(size int) []int {
+	return make([]int, size)
+}
+
+func initializeNextIndex(size int) []int {
+	nextIndex := make([]int, size)
+	for idx, _ := range nextIndex {
+		nextIndex[idx] = 1
+	}
+	return nextIndex
+}
+
 func (rf *Raft) StartAppendEntriesLoop() {
 	for !rf.killed() {
 		rf.mu.Lock()
@@ -388,9 +436,19 @@ func (rf *Raft) StartAppendEntriesLoop() {
 }
 
 func (rf *Raft) broadcastAppendEntries() {
+	var entries []LogEntry
 	for peerIdx := range rf.peers {
+		if peerIdx == rf.me {
+			continue
+		}
+
+		entries = make([]LogEntry, 0)
+		//fmt.Printf("last log index: %d nextindex: %v\n", rf.getLastLogIndex(), rf.nextIndex)
+		if rf.getLastLogIndex() >= rf.nextIndex[peerIdx] {
+			entries = append(entries, rf.log[rf.nextIndex[peerIdx]])
+		}
 		// Passed all the parameters in to avoid the parameters change when the go routine is executed.
-		go rf.sendAndProcessAppendEntriesRPC(rf.currentTerm, rf.me, 0, 0, nil, 0, peerIdx)
+		go rf.sendAndProcessAppendEntriesRPC(rf.currentTerm, rf.me, rf.getLastLogIndex(), rf.getLastLogTerm(), entries, rf.commitIndex, peerIdx)
 	}
 }
 
@@ -405,8 +463,53 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 		Entries:      entries,
 		LeaderCommit: leaderCommit,
 	}
+
 	appendEntriesReply := AppendEntriesReply{}
 	rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// The only case when term can be 0 is when it timeout. So we should ignore this reply.
+	if appendEntriesReply.Term == 0 {
+		return
+	}
+
+	// Not leader anymore, do nothing.
+	if rf.role != 0 {
+		return
+	}
+
+	if appendEntriesReply.Term > rf.currentTerm {
+		rf.currentTerm = appendEntriesReply.Term
+		rf.role = 2
+		rf.votedFor = -1
+		rf.voteCount = 0
+		return
+	}
+
+	if appendEntriesReply.Success {
+		newCommitIndex := rf.commitIndex + 1
+
+		rf.nextIndex[receiverId] += len(entries)
+		rf.matchIndex[receiverId] += len(entries)
+
+		cnt := 0
+		for _, idx := range rf.matchIndex {
+			if idx >= newCommitIndex {
+				cnt += 1
+			}
+		}
+
+		if cnt >= (len(rf.peers) / 2 + 1) && rf.log[newCommitIndex-1].Term == rf.currentTerm {
+			rf.commitIndex = newCommitIndex
+		}
+
+	} else {
+		fmt.Printf("appendEntry args: %+v, reply: %+v", appendEntriesArgs, appendEntriesReply)
+		fmt.Printf(" state: %s, receiver id: %d \n", rf.getStateString(), receiverId)
+		rf.nextIndex[receiverId] -= 1
+	}
 }
 
 func (rf *Raft) StartRequestVoteLoop() {
@@ -502,5 +605,5 @@ func (rf *Raft) getLastLogTerm() int {
 
 // This needs to be called while mutex is held.
 func (rf *Raft) getStateString() string {
-	return fmt.Sprintf("term: %d, id: %d", rf.currentTerm, rf.me)
+	return fmt.Sprintf("term: %d, id: %d, role: %d", rf.currentTerm, rf.me, rf.role)
 }
