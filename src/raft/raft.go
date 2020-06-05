@@ -56,6 +56,7 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
+	applyChan chan ApplyMsg
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -234,6 +235,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	//fmt.Printf("args: %+v, state: %s \n", args, rf.getStateString())
 	if args.PrevLogIndex != 0 && rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -253,10 +255,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		if args.LeaderCommit > rf.commitIndex {
-			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries))
+			newCommitIdx := min(args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries))
+			if newCommitIdx > rf.commitIndex {
+				rf.commitIndex = newCommitIdx
+				for idx := newCommitIdx; idx < newCommitIdx + 1; idx++ {
+					rf.applyChan <- ApplyMsg{
+						CommandValid: true,
+						Command:      rf.log[idx].Command,
+						CommandIndex: idx,
+					}
+				}
+				fmt.Printf(">>>update cidx: %d, lcidx: %d r: %d, log: %v\n",
+					rf.commitIndex, args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries), rf.log)
+
+			}
 		}
 
-		rf.log = append(rf.log[:args.PrevLogIndex], args.Entries...)
+		//fmt.Printf("append entry, args: %+v\n", args)
+		fmt.Printf(">>>log: %v\n", rf.log)
+		// Add one to avoid remove the dummy log entry.
+		rf.log = append(rf.log[:args.PrevLogIndex + 1], args.Entries...)
 		reply.Success = true
 		reply.Term = rf.currentTerm
 	}
@@ -324,6 +342,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+
 	if rf.killed() {
 		return -1, -1, false
 	}
@@ -334,14 +353,20 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	index = rf.getLastLogIndex() + 1
 	term = rf.currentTerm
 	isLeader = rf.role == 0
+	if !isLeader {
+		return -1, -1, false
+	}
+
+	fmt.Printf("start: %v\n", command)
 	rf.log = append(rf.log, LogEntry{
 		Command: command,
 		Term:    rf.currentTerm,
 	})
-	rf.mu.Unlock()
 
 	return index, term, isLeader
 }
@@ -386,11 +411,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyChan = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.log = make([]LogEntry, 0)
+	rf.log = initializeLog()
 
 	rf.commitIndex = 0
 	rf.lastApplied = 0
@@ -402,6 +428,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteCount = 0
 	rf.lastAppendEntriesReceivedTime = time.Now().UnixNano()
 
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -410,6 +437,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.StartRequestVoteLoop()
 
 	return rf
+}
+
+func initializeLog() []LogEntry {
+	dummyLog := LogEntry{}
+	return []LogEntry{dummyLog}
 }
 
 func initializeMatchIndex(size int) []int {
@@ -443,12 +475,15 @@ func (rf *Raft) broadcastAppendEntries() {
 		}
 
 		entries = make([]LogEntry, 0)
+		prevLogIndex := rf.getLastLogIndex()
 		//fmt.Printf("last log index: %d nextindex: %v\n", rf.getLastLogIndex(), rf.nextIndex)
 		if rf.getLastLogIndex() >= rf.nextIndex[peerIdx] {
-			entries = append(entries, rf.log[rf.nextIndex[peerIdx]])
+			entries = append(entries, rf.log[rf.nextIndex[peerIdx]:]...)
+			prevLogIndex = prevLogIndex - len(entries)
 		}
+
 		// Passed all the parameters in to avoid the parameters change when the go routine is executed.
-		go rf.sendAndProcessAppendEntriesRPC(rf.currentTerm, rf.me, rf.getLastLogIndex(), rf.getLastLogTerm(), entries, rf.commitIndex, peerIdx)
+		go rf.sendAndProcessAppendEntriesRPC(rf.currentTerm, rf.me, prevLogIndex, rf.log[prevLogIndex].Term, entries, rf.commitIndex, peerIdx)
 	}
 }
 
@@ -464,7 +499,10 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 		LeaderCommit: leaderCommit,
 	}
 
+	//fmt.Printf("r: %d\narg: %+v\nstate: %+v\n",receiverId, appendEntriesArgs, rf.getStateString())
+
 	appendEntriesReply := AppendEntriesReply{}
+	//fmt.Printf("full log: %+v\n", rf.log)
 	rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
 
 	rf.mu.Lock()
@@ -501,8 +539,16 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 			}
 		}
 
-		if cnt >= (len(rf.peers) / 2 + 1) && rf.log[newCommitIndex-1].Term == rf.currentTerm {
+		fmt.Printf("To update cindex: %s, cindex: %d r: %d, e: %d \n",
+			rf.getStateString(), rf.commitIndex, receiverId, len(entries))
+		if cnt >= (len(rf.peers) / 2 + 1) && rf.log[newCommitIndex].Term == rf.currentTerm {
 			rf.commitIndex = newCommitIndex
+			rf.applyChan <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.log[newCommitIndex].Command,
+				CommandIndex: newCommitIndex,
+			}
+			fmt.Printf("Updated commit index\n")
 		}
 
 	} else {
@@ -593,14 +639,11 @@ func (rf *Raft) exceedElectionTimeout() bool {
 }
 
 func (rf *Raft) getLastLogIndex() int {
-	return len(rf.log)
+	return len(rf.log) - 1
 }
 
 func (rf *Raft) getLastLogTerm() int {
-	if len(rf.log) == 0 {
-		return 0
-	}
-	return rf.log[len(rf.log) - 1].Term
+	return rf.log[rf.getLastLogIndex()].Term
 }
 
 // This needs to be called while mutex is held.
