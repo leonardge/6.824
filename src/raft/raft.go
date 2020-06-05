@@ -265,14 +265,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 						CommandIndex: idx,
 					}
 				}
-				fmt.Printf(">>>update cidx: %d, lcidx: %d r: %d, log: %v\n",
-					rf.commitIndex, args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries), rf.log)
+				//fmt.Printf(">>>update cidx: %d, lcidx: %d r: %d, log: %v\n",
+				//	rf.commitIndex, args.LeaderCommit, rf.getLastLogIndex() + len(args.Entries), rf.log)
 
 			}
 		}
 
 		//fmt.Printf("append entry, args: %+v\n", args)
-		fmt.Printf(">>>log: %v\n", rf.log)
+		//fmt.Printf(">>>log: %v\n", rf.log)
 		// Add one to avoid remove the dummy log entry.
 		rf.log = append(rf.log[:args.PrevLogIndex + 1], args.Entries...)
 		reply.Success = true
@@ -362,7 +362,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return -1, -1, false
 	}
 
-	fmt.Printf("start: %v\n", command)
 	rf.log = append(rf.log, LogEntry{
 		Command: command,
 		Term:    rf.currentTerm,
@@ -500,7 +499,6 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 	}
 
 	//fmt.Printf("r: %d\narg: %+v\nstate: %+v\n",receiverId, appendEntriesArgs, rf.getStateString())
-
 	appendEntriesReply := AppendEntriesReply{}
 	//fmt.Printf("full log: %+v\n", rf.log)
 	rf.sendAppendEntries(receiverId, &appendEntriesArgs, &appendEntriesReply)
@@ -539,21 +537,20 @@ func (rf *Raft) sendAndProcessAppendEntriesRPC(
 			}
 		}
 
-		fmt.Printf("To update cindex: %s, cindex: %d r: %d, e: %d \n",
-			rf.getStateString(), rf.commitIndex, receiverId, len(entries))
+		//fmt.Printf("To update cindex: %s, cindex: %d r: %d, e: %d \n",
+		//	rf.getStateString(), rf.commitIndex, receiverId, len(entries))
 		if cnt >= (len(rf.peers) / 2 + 1) && rf.log[newCommitIndex].Term == rf.currentTerm {
-			rf.commitIndex = newCommitIndex
 			rf.applyChan <- ApplyMsg{
 				CommandValid: true,
 				Command:      rf.log[newCommitIndex].Command,
 				CommandIndex: newCommitIndex,
 			}
-			fmt.Printf("Updated commit index\n")
+			rf.commitIndex = newCommitIndex
 		}
 
 	} else {
-		fmt.Printf("appendEntry args: %+v, reply: %+v", appendEntriesArgs, appendEntriesReply)
-		fmt.Printf(" state: %s, receiver id: %d \n", rf.getStateString(), receiverId)
+		//fmt.Printf("appendEntry args: %+v, reply: %+v", appendEntriesArgs, appendEntriesReply)
+		//fmt.Printf(" state: %s, receiver id: %d \n", rf.getStateString(), receiverId)
 		rf.nextIndex[receiverId] -= 1
 	}
 }
